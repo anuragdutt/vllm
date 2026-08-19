@@ -45,8 +45,12 @@ def _gdn_block_idx_prep_kernel(
     nct = tl.load(num_computed_ptr + offs, mask=mask, other=0)
     # Verbatim semantics of compute_mamba_prefix_caching_block_indices
     # (mamba_attn.py:91-101): cdiv(n, B) - 1 with the same clamp placement
-    # (first_scheduled deliberately unclamped). All numerators are >= 0, so
-    # (n + B - 1) // B == cdiv(n, B) regardless of floor/trunc division.
+    # (first_scheduled deliberately unclamped). Domain restriction: the
+    # formulas require nct >= 0 and sl >= 0 (for nct <= -B the unclamped fs
+    # would diverge from torch's floor division under Triton's truncating
+    # `//`). This always holds in the shipped wiring — nct = seq_lens -
+    # query_lens with both >= 0 and padded rows zeroed by the runner — but
+    # unit tests feeding raw tensors must respect it too.
     lc = tl.maximum((nct + BLOCK_SIZE - 1) // BLOCK_SIZE - 1, 0)
     fs = (nct + BLOCK_SIZE) // BLOCK_SIZE - 1
     ls = tl.maximum((sl + BLOCK_SIZE - 1) // BLOCK_SIZE - 1, 0)

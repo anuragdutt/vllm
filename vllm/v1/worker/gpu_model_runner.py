@@ -2519,6 +2519,13 @@ class GPUModelRunner(
             )
 
             extra_attn_metadata_args = {}
+            # GDN metadata (and the shared prep buffers) are global-row
+            # indexed, while per-ubatch builds receive request-sliced,
+            # renumbered metadata — fail loudly for ANY GDN ubatch build,
+            # not just the spec-decode ones asserted below.
+            assert ubid is None or not isinstance(
+                builder, GDNAttentionMetadataBuilder
+            ), "UBatching not supported with GDN yet"
             if use_spec_decode and isinstance(
                 builder,
                 (
@@ -2549,9 +2556,19 @@ class GPUModelRunner(
                     extra_attn_metadata_args["prev_last_scheduled_idx"] = (
                         self.mamba_prev_last_scheduled_idx.gpu[:num_reqs_padded]
                     )
-            if gdn_block_idx_prep is not None and isinstance(
-                builder, GDNAttentionMetadataBuilder
+            if (
+                ubid is None
+                and gdn_block_idx_prep is not None
+                and isinstance(builder, GDNAttentionMetadataBuilder)
             ):
+                # Never hand the global-row prep buffers to a per-ubatch
+                # (request-sliced) build — it would consume another ubatch's
+                # anchors; sliced builds fall back to the eager per-builder
+                # math, which is per-slice-correct.
+                assert (
+                    self.cache_config.mamba_block_size
+                    == builder.kv_cache_spec.block_size
+                ), "prep-kernel block size diverged from the GDN kv_cache_spec"
                 extra_attn_metadata_args["block_idx_prep"] = gdn_block_idx_prep
 
             if for_cudagraph_capture:
