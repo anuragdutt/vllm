@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Literal
 import torch
 
 from vllm.config import VllmConfig
+from vllm.model_executor.layers.mamba.ops.gdn_scatter import (
+    gdn_inkernel_ckpt_write_enabled,
+)
 from vllm.utils.math_utils import cdiv
 from vllm.utils.torch_utils import async_tensor_h2d
 from vllm.v1.attention.backend import (
@@ -645,13 +648,18 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
             # rows always precede padded rows in build order.
             num_real_reqs = num_decodes + num_spec_decodes
             num_blocks = all_state_indices_tensor.size(1)
-            self.all_state_indices_tensor[:num_real_reqs, :num_blocks].copy_(
-                all_state_indices_tensor[:num_real_reqs], non_blocking=True
-            )
-            all_state_indices_tensor = self.all_state_indices_tensor[
-                :batch_size, :num_blocks
-            ]
-            all_state_indices_tensor[num_real_reqs:].fill_(NULL_BLOCK_ID)
+            if not gdn_inkernel_ckpt_write_enabled():
+                self.all_state_indices_tensor[:num_real_reqs, :num_blocks].copy_(
+                    all_state_indices_tensor[:num_real_reqs], non_blocking=True
+                )
+                all_state_indices_tensor = self.all_state_indices_tensor[
+                    :batch_size, :num_blocks
+                ]
+                all_state_indices_tensor[num_real_reqs:].fill_(NULL_BLOCK_ID)
+            # else: captured kernels read the runner-persistent block table
+            # directly — it is a stable row-0-based slice of a per-run
+            # allocation, and the runner NULL-fills padded rows every step,
+            # so both reasons for the staging copy are already satisfied.
 
             # With the prep kernel the anchors already live in shared
             # runner-persistent buffers (padded rows included) — no staging.

@@ -51,6 +51,10 @@ from vllm.model_executor.layers.mamba.ops.causal_conv1d import (
     causal_conv1d_fn,
     causal_conv1d_update,
 )
+from vllm.model_executor.layers.mamba.ops.gdn_scatter import (
+    gdn_inkernel_ckpt_write_enabled,
+    gdn_scatter_block_checkpoints_triton,
+)
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.quantization.auto_awq import AutoAWQConfig
 from vllm.model_executor.layers.quantization.auto_gptq import AutoGPTQConfig
@@ -1850,18 +1854,33 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
                 # from the per-chunk exports). Replaces the blanket
                 # final-state write below.
                 assert attn_metadata.chunk_offsets is not None
-                gdn_scatter_block_checkpoints(
-                    ssm_state,
-                    inter_states.squeeze(0),
-                    last_recurrent_state,
-                    p_all_state_indices,
-                    p_block_idx_first_scheduled,
-                    p_block_idx_last_scheduled,
-                    p_num_computed_tokens,
-                    attn_metadata.chunk_offsets,
-                    self.cache_config.mamba_block_size,
-                    FLA_CHUNK_SIZE,
-                )
+                if gdn_inkernel_ckpt_write_enabled():
+                    gdn_scatter_block_checkpoints_triton(
+                        ssm_state,
+                        inter_states.squeeze(0),
+                        last_recurrent_state,
+                        p_all_state_indices,
+                        p_block_idx_first_scheduled,
+                        p_block_idx_last_scheduled,
+                        p_num_computed_tokens,
+                        attn_metadata.chunk_offsets,
+                        self.cache_config.mamba_block_size,
+                        FLA_CHUNK_SIZE,
+                        attn_metadata.num_prefill_tokens,
+                    )
+                else:
+                    gdn_scatter_block_checkpoints(
+                        ssm_state,
+                        inter_states.squeeze(0),
+                        last_recurrent_state,
+                        p_all_state_indices,
+                        p_block_idx_first_scheduled,
+                        p_block_idx_last_scheduled,
+                        p_num_computed_tokens,
+                        attn_metadata.chunk_offsets,
+                        self.cache_config.mamba_block_size,
+                        FLA_CHUNK_SIZE,
+                    )
             else:
                 core_attn_out_non_spec, last_recurrent_state = outputs
                 # Init cache
