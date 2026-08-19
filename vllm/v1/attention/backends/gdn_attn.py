@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Backend for GatedDeltaNet attention."""
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -34,6 +35,10 @@ if TYPE_CHECKING:
     from vllm.model_executor.layers.mamba.ops.gdn_index_prep import (
         GDNBlockIdxPrepBuffers,
     )
+
+
+def gdn_hoist_mask_selects_enabled() -> bool:
+    return os.environ.get("VLLM_GDN_HOIST_MASK_SELECTS", "1") != "0"
 
 
 class GDNAttentionBackend(AttentionBackend):
@@ -98,6 +103,24 @@ class GDNAttentionMetadata:
     # Full per-request block table (all blocks, not sliced to the leading
     # 1 + num_spec entries); the all-mode scatter/gather indexes into it.
     all_state_indices_tensor: torch.Tensor | None = None
+
+    # Builder-preselected all-mode row slices for mixed (spec + prefill)
+    # eager batches, selected once per step with the CPU spec mask (sync-free;
+    # a device-bool-mask select in the layer runs torch.nonzero -> count DtoH
+    # + cudaStreamSynchronize, once per select per GDN layer). ns_* = non-spec
+    # rows, spec_* = spec rows, both in build order. Populated only when
+    # VLLM_GDN_HOIST_MASK_SELECTS is on and the batch is mixed.
+    ns_all_state_indices_sel: torch.Tensor | None = None
+    ns_block_idx_last_computed_sel: torch.Tensor | None = None
+    ns_block_idx_first_scheduled_sel: torch.Tensor | None = None
+    ns_block_idx_last_scheduled_sel: torch.Tensor | None = None
+    ns_num_computed_tokens_sel: torch.Tensor | None = None
+    spec_all_state_indices_sel: torch.Tensor | None = None
+    spec_block_idx_last_scheduled_sel: torch.Tensor | None = None
+    spec_block_idx_last_computed_sel: torch.Tensor | None = None
+    spec_block_idx_prev_step_sel: torch.Tensor | None = None
+    spec_block_idx_packed_anchors_sel: torch.Tensor | None = None
+    spec_block_idx_packed_anchors_spec_sel: torch.Tensor | None = None
 
     # Pre-computed FLA chunk metadata (avoids GPU->CPU sync in prepare_chunk_indices)
     chunk_indices: torch.Tensor | None = None
@@ -494,6 +517,17 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
         block_idx_packed_anchors_spec = None
         num_computed_tokens = None
         all_state_indices_tensor = None
+        ns_all_state_indices_sel = None
+        ns_block_idx_last_computed_sel = None
+        ns_block_idx_first_scheduled_sel = None
+        ns_block_idx_last_scheduled_sel = None
+        ns_num_computed_tokens_sel = None
+        spec_all_state_indices_sel = None
+        spec_block_idx_last_scheduled_sel = None
+        spec_block_idx_last_computed_sel = None
+        spec_block_idx_prev_step_sel = None
+        spec_block_idx_packed_anchors_sel = None
+        spec_block_idx_packed_anchors_spec_sel = None
         if self.vllm_config.cache_config.mamba_cache_mode == "all":
             mamba_block_size = self.kv_cache_spec.block_size
             num_computed_tokens = context_lens_tensor
@@ -550,6 +584,54 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
                         )
                     else:
                         block_idx_last_scheduled_token_prev_step = fallback
+
+            # Mixed (spec + prefill) eager batches: pre-select the ns_*/spec_*
+            # row slices once per step with the CPU spec mask — CPU-mask
+            # indexing of device tensors does not sync (the
+            # spec_state_indices_tensor select above already relies on this).
+            # The layer otherwise re-selects with the DEVICE mask in every GDN
+            # layer, each select costing a torch.nonzero count DtoH +
+            # cudaStreamSynchronize.
+            if (
+                gdn_hoist_mask_selects_enabled()
+                and num_prefills > 0
+                and spec_sequence_masks_cpu is not None
+            ):
+                ns_cpu = ~spec_sequence_masks_cpu
+                ns_all_state_indices_sel = all_state_indices_tensor[ns_cpu]
+                ns_block_idx_last_computed_sel = block_idx_last_computed_token[
+                    ns_cpu
+                ]
+                ns_block_idx_first_scheduled_sel = block_idx_first_scheduled_token[
+                    ns_cpu
+                ]
+                ns_block_idx_last_scheduled_sel = block_idx_last_scheduled_token[
+                    ns_cpu
+                ]
+                ns_num_computed_tokens_sel = num_computed_tokens[ns_cpu]
+                spec_all_state_indices_sel = all_state_indices_tensor[
+                    spec_sequence_masks_cpu
+                ]
+                spec_block_idx_last_scheduled_sel = block_idx_last_scheduled_token[
+                    spec_sequence_masks_cpu
+                ]
+                spec_block_idx_last_computed_sel = block_idx_last_computed_token[
+                    spec_sequence_masks_cpu
+                ]
+                if block_idx_last_scheduled_token_prev_step is not None:
+                    spec_block_idx_prev_step_sel = (
+                        block_idx_last_scheduled_token_prev_step[
+                            spec_sequence_masks_cpu
+                        ]
+                    )
+                if block_idx_packed_anchors is not None:
+                    spec_block_idx_packed_anchors_sel = block_idx_packed_anchors[
+                        spec_sequence_masks_cpu
+                    ]
+                if block_idx_packed_anchors_spec is not None:
+                    spec_block_idx_packed_anchors_spec_sel = (
+                        block_idx_packed_anchors_spec[spec_sequence_masks_cpu]
+                    )
 
         # Prepare per-request tensors for cudagraph. m.num_actual_tokens is
         # token-padded for FULL graph replay, but the GDN state/query/accepted
@@ -729,6 +811,19 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
             ),
             block_idx_packed_anchors=block_idx_packed_anchors,
             block_idx_packed_anchors_spec=block_idx_packed_anchors_spec,
+            ns_all_state_indices_sel=ns_all_state_indices_sel,
+            ns_block_idx_last_computed_sel=ns_block_idx_last_computed_sel,
+            ns_block_idx_first_scheduled_sel=ns_block_idx_first_scheduled_sel,
+            ns_block_idx_last_scheduled_sel=ns_block_idx_last_scheduled_sel,
+            ns_num_computed_tokens_sel=ns_num_computed_tokens_sel,
+            spec_all_state_indices_sel=spec_all_state_indices_sel,
+            spec_block_idx_last_scheduled_sel=spec_block_idx_last_scheduled_sel,
+            spec_block_idx_last_computed_sel=spec_block_idx_last_computed_sel,
+            spec_block_idx_prev_step_sel=spec_block_idx_prev_step_sel,
+            spec_block_idx_packed_anchors_sel=spec_block_idx_packed_anchors_sel,
+            spec_block_idx_packed_anchors_spec_sel=(
+                spec_block_idx_packed_anchors_spec_sel
+            ),
             num_computed_tokens=num_computed_tokens,
             all_state_indices_tensor=all_state_indices_tensor,
             nums_dict=nums_dict,

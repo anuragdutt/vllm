@@ -1372,7 +1372,21 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         ns_block_idx_first_scheduled = ns_block_idx_last_scheduled = None
         ns_num_computed_tokens = None
         if is_all_mode and attn_metadata.num_prefills > 0:
-            if attn_metadata.spec_sequence_masks is not None:
+            if attn_metadata.ns_all_state_indices_sel is not None:
+                # Builder pre-selected these once per step with the CPU spec
+                # mask — no per-layer device-mask nonzero syncs.
+                ns_all_state_indices = attn_metadata.ns_all_state_indices_sel
+                ns_block_idx_last_computed = (
+                    attn_metadata.ns_block_idx_last_computed_sel
+                )
+                ns_block_idx_first_scheduled = (
+                    attn_metadata.ns_block_idx_first_scheduled_sel
+                )
+                ns_block_idx_last_scheduled = (
+                    attn_metadata.ns_block_idx_last_scheduled_sel
+                )
+                ns_num_computed_tokens = attn_metadata.ns_num_computed_tokens_sel
+            elif attn_metadata.spec_sequence_masks is not None:
                 _ns = ~attn_metadata.spec_sequence_masks
                 ns_all_state_indices = attn_metadata.all_state_indices_tensor[_ns]
                 ns_block_idx_last_computed = (
@@ -1459,6 +1473,24 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
                     )
                     spec_packed_anchors = attn_metadata.block_idx_packed_anchors_spec
                     conv_spec_packed_anchors = attn_metadata.block_idx_packed_anchors
+                elif attn_metadata.spec_all_state_indices_sel is not None:
+                    # Builder pre-selected (CPU spec mask, no device sync).
+                    spec_table = attn_metadata.spec_all_state_indices_sel
+                    spec_block_idx_last_scheduled = (
+                        attn_metadata.spec_block_idx_last_scheduled_sel
+                    )
+                    spec_block_idx_last_computed = (
+                        attn_metadata.spec_block_idx_last_computed_sel
+                    )
+                    spec_block_idx_prev_step = (
+                        attn_metadata.spec_block_idx_prev_step_sel
+                    )
+                    spec_packed_anchors = (
+                        attn_metadata.spec_block_idx_packed_anchors_spec_sel
+                    )
+                    conv_spec_packed_anchors = (
+                        attn_metadata.spec_block_idx_packed_anchors_sel
+                    )
                 else:
                     spec_table = attn_metadata.all_state_indices_tensor[
                         spec_sequence_masks
