@@ -740,10 +740,16 @@ class Qwen3NextModel(nn.Module, EagleModelMixin):
         loader = AutoWeightsLoader(self)
         loaded = loader.load_weights(weights, mapper=mapper)
         # Accuracy-neutral weight-layout transforms (de-interleave /
-        # tiny-GEMM concat); re-applied after every full load because
-        # loading rewrites the raw checkpoint layout.
-        for module in self.modules():
-            if isinstance(module, QwenGatedDeltaNetAttention):
+        # tiny-GEMM concat). load_weights can be invoked more than once per
+        # engine init (e.g. the MTP draft-model load streams the checkpoint
+        # again), and re-permuting already-permuted weights scrambles them,
+        # so transform a layer ONLY when THIS call actually (re)wrote its
+        # in_proj weights (which are then in raw checkpoint layout).
+        for name, module in self.named_modules():
+            if (
+                isinstance(module, QwenGatedDeltaNetAttention)
+                and f"{name}.in_proj_qkvz.weight" in loaded
+            ):
                 module.apply_traffic_opt_weight_transforms()
         return loaded
 
