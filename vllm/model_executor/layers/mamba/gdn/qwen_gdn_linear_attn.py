@@ -470,13 +470,24 @@ def gdn_deinterleave_qkvz_enabled() -> bool:
 
 def gdn_concat_tiny_gemms_enabled() -> bool:
     """C6: fold the tiny in_proj_ba GEMM rows into the in_proj_qkvz GEMM
-    (N 12288 -> 12352 at TP1) at weight load, and the 1-row
-    shared_expert_gate into the MoE router gate GEMM (N 512 -> 513, see
-    MoERunner). Kills the splitK GEMM + splitKreduce partners. Output
-    columns are mathematically identical; a different GEMM shape may pick
-    a different tile config, so ULP-level drift is possible (tested).
+    (N 12288 -> 12352 at TP1) at weight load. Kills the splitK GEMM +
+    splitKreduce partner; measured in-graph on B200 the fused GEMM also
+    beats the separate qkvz GEMM (-3.1 us at ntok=16 / -4.5 us at 128 for
+    the projection). Output columns are torch.equal-bit-exact on B200.
     Default on; "0" restores the exact old two-GEMM path."""
     return os.environ.get("VLLM_GDN_CONCAT_TINY_GEMMS", "1") != "0"
+
+
+def gdn_concat_router_gate_enabled() -> bool:
+    """C6 router-gate fold: fold the 1-row shared_expert_gate into the MoE
+    router gate GEMM (padded N 512 -> 528; see MoERunner). DEFAULT OFF:
+    measured in-graph on B200 the unpadded N=513 GEMM is a cuBLAS cliff
+    (+17..+22 us/layer vs the separate pair) and even the padded variant
+    nets only -0.8..-1.5 us/layer after the contiguous router-logits
+    slice, while introducing ULP-class drift on the routing logits
+    (~0.5-0.8% of logit scale) that can flip near-tie top-k picks.
+    Set "1" to opt in."""
+    return os.environ.get("VLLM_GDN_CONCAT_ROUTER_GATE", "0") != "0"
 
 
 def build_qkvz_deinterleave_perm(

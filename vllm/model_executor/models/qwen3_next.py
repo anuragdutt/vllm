@@ -35,7 +35,7 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
-    gdn_concat_tiny_gemms_enabled,
+    gdn_concat_router_gate_enabled,
 )
 from vllm.model_executor.layers.mamba.mamba_utils import (
     MambaStateCopyFunc,
@@ -162,12 +162,13 @@ class Qwen3NextSparseMoeBlock(nn.Module):
                 "shared expert has a different quantization spec than routed "
                 "experts. Falling back to non-fused shared expert path."
             )
-        # C6 (VLLM_GDN_CONCAT_TINY_GEMMS): hand the 1-row shared expert
-        # gate to the MoE runner, which folds its rows into the router
-        # gate GEMM and applies the sigmoid scaling itself; the MLP then
-        # must not apply its own expert gate.
+        # C6 router-gate fold (VLLM_GDN_CONCAT_ROUTER_GATE, default off --
+        # measured in-graph negative unpadded, marginal padded): hand the
+        # 1-row shared expert gate to the MoE runner, which folds its rows
+        # into the (padded) router gate GEMM and applies the sigmoid
+        # scaling itself; the MLP then must not apply its own expert gate.
         _concat_shared_gate = (
-            gdn_concat_tiny_gemms_enabled()
+            gdn_concat_router_gate_enabled()
             and not _fse_enabled
             and config.shared_expert_intermediate_size > 0
         )

@@ -23,6 +23,7 @@ from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
     build_ba_deinterleave_perm,
     build_qkvz_deinterleave_perm,
+    gdn_concat_router_gate_enabled,
     gdn_concat_tiny_gemms_enabled,
     gdn_deinterleave_qkvz_enabled,
 )
@@ -84,12 +85,18 @@ def _drift_stats(x: torch.Tensor, y: torch.Tensor) -> dict:
 def test_flag_defaults_and_off(monkeypatch):
     monkeypatch.delenv("VLLM_GDN_DEINTERLEAVE_QKVZ", raising=False)
     monkeypatch.delenv("VLLM_GDN_CONCAT_TINY_GEMMS", raising=False)
+    monkeypatch.delenv("VLLM_GDN_CONCAT_ROUTER_GATE", raising=False)
     assert gdn_deinterleave_qkvz_enabled()
     assert gdn_concat_tiny_gemms_enabled()
+    # router-gate fold is default OFF (measured in-graph negative unpadded,
+    # marginal padded, plus routing-logit drift)
+    assert not gdn_concat_router_gate_enabled()
     monkeypatch.setenv("VLLM_GDN_DEINTERLEAVE_QKVZ", "0")
     monkeypatch.setenv("VLLM_GDN_CONCAT_TINY_GEMMS", "0")
+    monkeypatch.setenv("VLLM_GDN_CONCAT_ROUTER_GATE", "1")
     assert not gdn_deinterleave_qkvz_enabled()
     assert not gdn_concat_tiny_gemms_enabled()
+    assert gdn_concat_router_gate_enabled()
 
 
 @pytest.mark.parametrize("ntok", [1, 7, 128])
@@ -196,9 +203,15 @@ def test_moe_gate_concat(ntok):
     ref_logits = torch.nn.functional.linear(h, w_gate)
     ref_seg = torch.nn.functional.linear(h, w_seg)
 
-    fused = torch.nn.functional.linear(h, torch.cat([w_gate, w_seg], dim=0))
+    # padded fold (N 513 -> 528), as the runner builds it
+    combined = torch.cat([w_gate, w_seg], dim=0)
+    pad = (-combined.shape[0]) % 16
+    combined = torch.cat(
+        [combined, combined.new_zeros(pad, combined.shape[1])], dim=0
+    )
+    fused = torch.nn.functional.linear(h, combined)
     got_logits = fused[:, :512].contiguous()
-    got_seg = fused[:, 512:]
+    got_seg = fused[:, 512:513]
 
     bitexact = torch.equal(got_logits, ref_logits) and torch.equal(
         got_seg.contiguous(), ref_seg

@@ -290,6 +290,7 @@ class MoERunner(MoERunnerInterface):
         )
         self._combined_gate_weight: torch.Tensor | None = None
         self._gate_out_features: int | None = None
+        self._shared_gate_out_features: int | None = None
 
         self._shared_experts: SharedExperts | None = None
         if shared_experts is not None:
@@ -356,10 +357,23 @@ class MoERunner(MoERunnerInterface):
         if self._combined_gate_weight is None:
             assert self.gate is not None and self.shared_expert_gate is not None
             self._gate_out_features = self.gate.weight.shape[0]
-            self._combined_gate_weight = torch.cat(
+            self._shared_gate_out_features = self.shared_expert_gate.weight.shape[0]
+            combined = torch.cat(
                 [self.gate.weight, self.shared_expert_gate.weight],
                 dim=0,
             )
+            if self._concat_shared_gate:
+                # Pad N to a multiple of 16: odd-N bf16 GEMMs hit a cuBLAS
+                # cliff on B200 (N=513 is 3-5x the N=528 kernel in-graph).
+                # The FSE path must NOT be padded (its topk kernel consumes
+                # exactly num_experts + num_shared columns).
+                pad = (-combined.shape[0]) % 16
+                if pad:
+                    combined = torch.cat(
+                        [combined, combined.new_zeros(pad, combined.shape[1])],
+                        dim=0,
+                    )
+            self._combined_gate_weight = combined
 
     @property
     def _quant_method(self) -> FusedMoEMethodBase:
@@ -848,7 +862,11 @@ class MoERunner(MoERunnerInterface):
                 self._maybe_fuse_gate_weights()
                 fused_logits = F.linear(hidden_states, self._combined_gate_weight)
                 router_logits = fused_logits[:, : self._gate_out_features].contiguous()
-                shared_gate_logit = fused_logits[:, self._gate_out_features :]
+                shared_gate_logit = fused_logits[
+                    :,
+                    self._gate_out_features : self._gate_out_features
+                    + self._shared_gate_out_features,
+                ]
             else:
                 router_logits, _ = self.gate(hidden_states)
 
