@@ -6,10 +6,10 @@ Selection-level tests for the ``VLLM_GDN_MOE_MONO_AGRS`` gate on
 ``TrtLlmNvFp4ExpertsMonolithic._supports_parallel_config``:
 
 - TP4+EP (allgather_reducescatter all2all, sequence-parallel MoE):
-  flag unset/=1 (default) -> Monolithic accepted, wins oracle ordering, and
+  flag=1 (opt-in) -> Monolithic accepted, wins oracle ordering, and
   pairs with ``MoEPrepareAndFinalizeNaiveDPEPMonolithic``;
-  flag=0 -> exact previous behavior (Monolithic rejected -> Modular +
-  ``MoEPrepareAndFinalizeNaiveDPEPModular``).
+  flag unset/=0 (default) -> exact previous behavior (Monolithic rejected ->
+  Modular + ``MoEPrepareAndFinalizeNaiveDPEPModular``).
 - TP1 (no EP, no all2all): Monolithic accepted under BOTH flag values —
   TP1 selection is provably untouched by the gate.
 - Every other all2all backend and the EPLB case remain rejected under both
@@ -131,15 +131,16 @@ class TestParallelConfigSanity:
 
 
 class TestMonoAgrsPredicate:
-    @pytest.mark.parametrize("flag", [None, "1"])
+    @pytest.mark.parametrize("flag", ["1"])
     def test_tp4_ep_agrs_flag_on_selects_monolithic(self, monkeypatch, flag):
         _set_flag(monkeypatch, flag)
         cfg = _tp4_ep_agrs()
         assert TrtLlmNvFp4ExpertsMonolithic._supports_parallel_config(cfg)
         assert _select_trtllm_kernel(cfg) is TrtLlmNvFp4ExpertsMonolithic
 
-    def test_tp4_ep_agrs_flag_off_selects_modular(self, monkeypatch):
-        _set_flag(monkeypatch, "0")
+    @pytest.mark.parametrize("flag", [None, "0"])
+    def test_tp4_ep_agrs_flag_off_selects_modular(self, monkeypatch, flag):
+        _set_flag(monkeypatch, flag)
         cfg = _tp4_ep_agrs()
         assert not TrtLlmNvFp4ExpertsMonolithic._supports_parallel_config(cfg)
         # Exact previous behavior: fall through to the Modular kernel.

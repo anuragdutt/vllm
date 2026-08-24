@@ -396,8 +396,8 @@ class TrtLlmNvFp4ExpertsMonolithic(
         prepare/finalize (MoEPrepareAndFinalizeNaiveDPEPMonolithic) allgathers
         the activations + router logits and the trtllm-gen kernel routes
         internally with local_expert_offset, so no dispatch metadata is
-        needed. Gated by VLLM_GDN_MOE_MONO_AGRS (default "1"; set "0" for the
-        exact previous behavior, i.e. fall back to the Modular kernel). The
+        needed. Gated by VLLM_GDN_MOE_MONO_AGRS (default "0" = the previous
+        behavior, the Modular kernel; set "1" to opt in). The
         EPLB exclusion and every other all2all backend rejection are kept.
         """
         if moe_parallel_config.enable_eplb:
@@ -406,7 +406,7 @@ class TrtLlmNvFp4ExpertsMonolithic(
             return True
         return (
             moe_parallel_config.use_ag_rs_all2all_kernels
-            and os.environ.get("VLLM_GDN_MOE_MONO_AGRS", "1") != "0"
+            and os.environ.get("VLLM_GDN_MOE_MONO_AGRS", "0") == "1"
         )
 
     @staticmethod
