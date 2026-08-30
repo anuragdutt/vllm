@@ -22,22 +22,22 @@ than align at low-to-mid concurrency and within 7–8% at c32.
 
 ## Throughput Pareto (tokens/s/GPU vs tokens/s/user; concurrency annotated)
 
-![TP1 Pareto](../plots/tp1_pareto.png)
+![TP1 Pareto](./tp1_pareto.png)
 ![TP4 Pareto](../plots/tp4_pareto.png)
 
 ## Latency vs concurrency (blue = all, orange = align; solid = spec, dashed = no-spec)
 
-![TP1 ITL p50](../plots/tp1_itl_p50.png)
-![TP1 TTFT p50](../plots/tp1_ttft_p50.png)
-![TP4 ITL p50](../plots/tp4_itl_p50.png)
-![TP4 TTFT p50](../plots/tp4_ttft_p50.png)
+![TP1 ITL p50](./tp1_itl_p50.png)
+![TP1 TTFT p50](./tp1_ttft_p50.png)
+![TP4 ITL p50](./tp4_itl_p50.png)
+![TP4 TTFT p50](./tp4_ttft_p50.png)
 
-p95 variants: [TP1 ITL](../plots/tp1_itl_p95.png), [TP1 TTFT](../plots/tp1_ttft_p95.png),
-[TP4 ITL](../plots/tp4_itl_p95.png), [TP4 TTFT](../plots/tp4_ttft_p95.png).
+p95 variants: [TP1 ITL](./tp1_itl_p95.png), [TP1 TTFT](./tp1_ttft_p95.png),
+[TP4 ITL](./tp4_itl_p95.png), [TP4 TTFT](./tp4_ttft_p95.png).
 
 ## Prefix-reuse probe (the structural mechanism)
 
-![hit rate vs probe length](../hitrate_vs_prefix.png)
+![hit rate vs probe length](./hitrate_vs_prefix.png)
 
 Warm one 8,000-token context in a single prefill chunk, probe with leading
 prefixes of length N. All-mode (block 1088) serves ~100% of every probe from
