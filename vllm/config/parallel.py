@@ -121,6 +121,10 @@ class ParallelConfig:
     """Number of pipeline parallel groups."""
     tensor_parallel_size: int = Field(default=1, ge=1)
     """Number of tensor parallel groups."""
+    # ssm_tensor_parallel_size: int = Field(default=1, ge=1)
+    # """Number of SSM tensor parallel groups."""
+    # gate_tensor_parallel_size: int = Field(default=1, ge=1)
+    # """Number of Gate tensor parallel groups."""
     prefill_context_parallel_size: int = Field(default=1, ge=1)
     """Number of prefill context parallel groups."""
     data_parallel_size: int = Field(default=1, ge=1)
@@ -161,6 +165,8 @@ class ParallelConfig:
     """Whether the deployed model is MoE (if known)."""
     enable_expert_parallel: bool = False
     """Use expert parallelism instead of tensor parallelism for MoE layers."""
+    enable_mamba_sg: bool = Field(default=False)
+    """To enable mamba SSM-Gate Tensor parallelism."""
     enable_ep_weight_filter: bool = False
     """Skip non-local expert weights during model loading when expert
     parallelism is active.  Each rank only reads its own expert shard from
@@ -439,6 +445,7 @@ class ParallelConfig:
 
     @model_validator(mode="after")
     def _validate_parallel_config(self) -> Self:
+
         if self._api_process_rank >= self._api_process_count:
             raise ValueError(
                 "Invalid value of `_api_process_rank`. "
