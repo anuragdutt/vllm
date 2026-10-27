@@ -1,3 +1,7 @@
+"""Mamba SSM/gate split: rank roles.
+
+Built from source and installed editable from the mounted checkout (workflow proof, 2026-10-27).
+"""
 from enum import Enum
 
 from vllm.distributed import (
